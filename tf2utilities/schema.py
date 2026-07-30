@@ -24,6 +24,22 @@ def remove_accents(text: str) -> str:
     return "".join(char for char in decomposed if not unicodedata.combining(char))
 
 
+def remove_the(text: str) -> str:
+    """
+    Strips every "the " occurrence from a name, so items match whether or not the
+    definite article is present (e.g. "Team Captain" == "The Team Captain").
+
+    Args:
+        text (str): The text to strip.
+
+    Returns:
+        str: The text without any "the " occurrence.
+    """
+    while "the " in text:
+        text = text.replace("the ", "", 1).strip()
+    return text
+
+
 exclusive_genuine = {
     "810": 831, # Genuine Red-Tape Recorder
     "811": 832, # Genuine Huo-Long Heater
@@ -187,6 +203,11 @@ class Schema:
         self.raw = data["raw"] or None
         self.time = data["time"] or time.time()
 
+        # Lazy caches, built on first use by their respective getters.
+        self._paintable_defindexes_cache = None
+        self._strange_parts_cache = None
+        self._craftable_weapons_cache = None
+
         cached = data.get("lookups") or {}
         self.crate_series_list = cached.get("crate_series_list") or self.get_crate_series_list()
         self.munition_crates_list = cached.get("munition_crates_list") or self.get_munition_crates_list()
@@ -236,7 +257,7 @@ class Schema:
 
             key = remove_accents(item["item_name"].lower())
             by_item_name.setdefault(key, item)
-            by_name_no_the.setdefault(key.replace("the ", ""), item)
+            by_name_no_the.setdefault(remove_the(key), item)
 
         self._items_by_defindex = by_defindex
         self._items_by_item_name = by_item_name
@@ -258,9 +279,8 @@ class Schema:
         self._paintkits_lower = [(name.lower(), pid) for name, pid in self.paintkits.items()]
         self._paints_lower = [(name.lower(), value) for name, value in self.paints.items()]
 
-        self._paint_name_by_decimal = {dec: name for name, dec in self.paints.items() if isinstance(dec, int)}
-        self._paint_name_by_decimal[5801378] = "Legacy Paint"
-        self._paint_decimal_by_name_lower = {name.lower(): dec for name, dec in self.paints.items() if isinstance(dec, int)}
+        self._paint_name_by_decimal = {dec: name for name, dec in self.paints.items()}
+        self._paint_decimal_by_name_lower = {name.lower(): dec for name, dec in self.paints.items()}
 
 
     def get_item_by_name_with_the(self, name: str) -> dict:
@@ -273,7 +293,7 @@ class Schema:
         Returns:
             dict: The item object.
         """
-        return self._items_by_name_no_the.get(remove_accents(name.lower()).replace("the ", "").strip())
+        return self._items_by_name_no_the.get(remove_the(remove_accents(name.lower())))
 
 
     def get_sku_from_name(self, name: str) -> str:
@@ -308,6 +328,13 @@ class Schema:
 
         parts = ["strange part:", "strange cosmetic part:", "strange filter:", "strange count transfer tool", "strange bacon grease"]
         if any(part in name for part in parts):
+            if "non-craftable" in name:
+                item["craftable"] = False
+                name = name.replace("non-craftable", "").strip()
+            elif "craftable" in name:
+                # Just in case people still want to try this, which should never exists
+                item["craftable"] = True
+                name = name.replace("craftable", "").strip()
             schema_item = self.get_item_by_item_name(name)
             if not schema_item: 
                 return item
@@ -420,7 +447,7 @@ class Schema:
                     break
 
         # Check for effects
-        exclude_atomic = True if any(exclude_name in name for exclude_name in ["bonk! atomic punch", "atomic accolade"]) else False
+        exclude_atomic = True if any(exclude_name in name for exclude_name in ["bonk! atomic punch", "atomic accolade", "bonk! atomic kicks", "atomic bomber"]) else False
 
         for effect, effect_id in self._effects_lower:
             if effect == "stardust" and "starduster" in name:
@@ -894,8 +921,6 @@ class Schema:
         Returns:
             int: The decimal numeral system of the paint.
         """
-        if name == "Legacy Paint": return 5801378
-
         return self._paint_decimal_by_name_lower.get(name.lower())
 
 
@@ -918,7 +943,7 @@ class Schema:
 
             to_object[paint_can["item_name"]] = int(paint_can['attributes'][0]['value'])
 
-        to_object["Legacy Paint"] = "5801378"
+        to_object["Legacy Paint"] = 5801378
 
         return to_object
 
@@ -930,13 +955,16 @@ class Schema:
         Returns:
             list: The array of paintable items' defindex.
         """
+        if self._paintable_defindexes_cache is not None: return self._paintable_defindexes_cache
+
         paintable_item_defindexes = []
-        
+
         for item in self.raw["schema"]["items"]:
-            if "capabilities" in item and "paintable" in item["capabilities"] and item["capabilities"]["paintable"] is True: 
+            if "capabilities" in item and "paintable" in item["capabilities"] and item["capabilities"]["paintable"] is True:
                 paintable_item_defindexes.append(item["defindex"])
 
-        return paintable_item_defindexes
+        self._paintable_defindexes_cache = paintable_item_defindexes
+        return self._paintable_defindexes_cache
 
     
     def get_strange_parts(self) -> dict:
@@ -946,6 +974,8 @@ class Schema:
         Returns:
             dict: The name and partial SKU of strange parts items.
         """
+        if self._strange_parts_cache is not None: return self._strange_parts_cache
+
         parts_to_exclude = {
             'Ubers',
             'Kill Assists',
@@ -999,7 +1029,8 @@ class Schema:
         for part in parts:
             to_object[part["type_name"]] = f"sp{part['type']}"
 
-        return to_object
+        self._strange_parts_cache = to_object
+        return self._strange_parts_cache
 
 
     def get_craftable_weapons_schema(self) -> list:
@@ -1009,6 +1040,8 @@ class Schema:
         Returns:
             list: The array of item objects for craftable weapons.
         """
+        if self._craftable_weapons_cache is not None: return self._craftable_weapons_cache
+
         weapons_to_exclude = {
             # Exclude these weapons
             266, # Horseless Headless Horsemann's Headtaker
@@ -1034,10 +1067,11 @@ class Schema:
 
         craftable_weapons = []
         for item in self.raw["schema"]["items"]:
-            if item["defindex"] not in weapons_to_exclude and item["item_quality"] == 6 and item.get("craft_class") == "weapon": 
+            if item["defindex"] not in weapons_to_exclude and item["item_quality"] == 6 and item.get("craft_class") == "weapon":
                 craftable_weapons.append(item)
 
-        return craftable_weapons
+        self._craftable_weapons_cache = craftable_weapons
+        return self._craftable_weapons_cache
 
 
     def get_weapons_for_crafting_by_class(self, char_class: str) -> list:
