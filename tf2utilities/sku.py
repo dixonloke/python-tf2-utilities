@@ -92,13 +92,16 @@ class SKU:
 
 
     @staticmethod
-    def from_object(item: dict) -> str:
+    def from_object(item: dict, legacy: bool = False) -> str:
         """
         Converts an item object to a SKU.
         
         Args:
             item (dict): The item object to convert.
-            
+            legacy (bool): If True, use the legacy attribute ordering
+                (target before festive; craftnumber/crateseries after festive).
+                Defaults to False, matching marketplace.tf's ordering.
+
         Returns:
             str: The SKU.
         """
@@ -128,16 +131,23 @@ class SKU:
 
         if item.get("effect"): sku += f";u{item['effect']}"
         if item.get("australium") is True: sku += ";australium"
+        if not legacy:
+            if item.get("craftnumber"): sku += f";n{item['craftnumber']}"
+            if item.get("crateseries"): sku += f";c{item['crateseries']}"
         if item.get("craftable") is False: sku += ";uncraftable"
         if item.get("tradable") is False: sku += ";untradable"
         if item.get("wear"): sku += f";w{item['wear']}"
         if item.get("paintkit") is not None and isinstance(item['paintkit'], int): sku += f";pk{item['paintkit']}"
         if item.get("quality2") and item["quality2"] == 11: sku += ";strange"
         if item.get("killstreak") and isinstance(item['killstreak'], int) and item["killstreak"] != 0: sku += f";kt-{item['killstreak']}"
-        if item.get("target"): sku += f";td-{item['target']}"
+        if legacy:
+            if item.get("target"): sku += f";td-{item['target']}"
         if item.get("festive") is True: sku += ';festive'
-        if item.get("craftnumber"): sku += f";n{item['craftnumber']}"
-        if item.get("crateseries"): sku += f";c{item['crateseries']}"
+        if legacy:
+            if item.get("craftnumber"): sku += f";n{item['craftnumber']}"
+            if item.get("crateseries"): sku += f";c{item['crateseries']}"
+        else:
+            if item.get("target"): sku += f";td-{item['target']}"
         if item.get("output"): sku += f";od-{item['output']}"
         if item.get("outputQuality"): sku += f";oq-{item['outputQuality']}"
         if item.get("paint"): sku += f";p{item['paint']}"
