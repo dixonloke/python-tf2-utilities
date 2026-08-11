@@ -56,7 +56,7 @@ exclusive_genuine = {
 
 
 exclusive_genuine_reversed = {
-    "831": 820, # Red-Tape Recorder
+    "831": 810, # Red-Tape Recorder
     "832": 811, # Huo-Long Heater
     "833": 812, # Flying Guillotine
     "834": 813, # Neon Annihilator
@@ -213,6 +213,7 @@ class Schema:
         self.munition_crates_list = cached.get("munition_crates_list") or self.get_munition_crates_list()
         self.weapon_skins_list = cached.get("weapon_skins_list") or self.get_weapon_skins_list()
         self.tool_target_list = cached.get("tool_target_list") or self.get_tool_target_list()
+        self.festivizable_defindexes = set(cached.get("festivizable_defindexes") or self.get_festivizable_defindexes())
 
         self.qualities = self.get_qualities()
         self.effects = self.get_particle_effects()
@@ -232,10 +233,39 @@ class Schema:
         """
         by_defindex = {}
         by_item_name = {}
-        by_name_no_the = {}
         upgradeable_by_class = {}
         promo_by_item_name = {}
         nonpromo_by_item_name = {}
+
+        paintkits_lower_set = {name.lower() for name in self.paintkits}
+        effects_lower_set = {name.lower() for name in self.effects}
+        qualities_lower_set = {name.lower() for name in self.qualities}
+
+        items_name_with_quality = set()
+        for quality in qualities_lower_set:
+            for paintkit in paintkits_lower_set:
+                # Example: Haunted Ghosts (236) for now, but might be more in the future.
+                if quality in paintkit:
+                    items_name_with_quality.add(paintkit)
+            for effect in effects_lower_set:
+                if effect == "community sparkle":
+                    continue
+                # Example: Haunted Ghosts (8), Haunted Phantasm Jr(86), Haunted Phantasm (3011)
+                # Haunted Kraken(257), Haunted Forever!(261)
+                if quality in effect:
+                    items_name_with_quality.add(effect)
+
+        effects_same_name_as_paintkit = set()
+        for effect in effects_lower_set:
+            for paintkit in paintkits_lower_set:
+                if effect in paintkit:
+                    effects_same_name_as_paintkit.add(effect)
+
+        items_name_with_quality_exclusions = [
+            "unusualifier", "strange part", "strange cosmetic part:",
+            "strange filter:", "strange count transfer tool", "strange bacon grease"
+        ]
+        items_name_with_atomic = set()
 
         for item in self.raw["schema"]["items"]:
             di = item["defindex"]
@@ -256,15 +286,27 @@ class Schema:
                 continue
 
             key = remove_accents(item["item_name"].lower())
-            by_item_name.setdefault(key, item)
-            by_name_no_the.setdefault(remove_the(key), item)
+            by_item_name.setdefault(remove_the(key), item)
+
+            if "atomic" in key:
+                items_name_with_atomic.add(key)
+            if not any(ex in key for ex in items_name_with_quality_exclusions):
+                for quality in qualities_lower_set:
+                    # Example: Haunted Metal Scrap(267), Haunted Hat(30300), Vintage Tyrolean(101), Vintage Merryweather(182)
+                    # And anything in the future that Valve might add.
+                    if key.startswith(quality):
+                        items_name_with_quality.add(key)
+                        break
 
         self._items_by_defindex = by_defindex
         self._items_by_item_name = by_item_name
-        self._items_by_name_no_the = by_name_no_the
         self._upgradeable_defindex_by_item_class = upgradeable_by_class
         self._promo_defindex_by_item_name = promo_by_item_name
         self._nonpromo_defindex_by_item_name = nonpromo_by_item_name
+
+        self._items_name_with_atomic = items_name_with_atomic
+        self._effects_same_name_as_paintkit = effects_same_name_as_paintkit
+        self._items_name_with_quality = items_name_with_quality
 
         self._attributes_by_defindex = {}
         for a in self.raw["schema"]["attributes"]:
@@ -281,19 +323,6 @@ class Schema:
 
         self._paint_name_by_decimal = {dec: name for name, dec in self.paints.items()}
         self._paint_decimal_by_name_lower = {name.lower(): dec for name, dec in self.paints.items()}
-
-
-    def get_item_by_name_with_the(self, name: str) -> dict:
-        """
-        Gets an item by name with "the" in it.
-
-        Args:
-            name (str): The name of the item.
-
-        Returns:
-            dict: The item object.
-        """
-        return self._items_by_name_no_the.get(remove_the(remove_accents(name.lower())))
 
 
     def get_sku_from_name(self, name: str) -> str:
@@ -319,12 +348,25 @@ class Schema:
         Returns:
             dict: The item object.
         """
-        name = name.lower()
+        name = name.lower().replace("uncraftable", "non-craftable").replace("noncraftable", "non-craftable")
         item = {
             "defindex": None,
             "quality": None,
             "craftable": True
         }
+
+        if name == "unusualifier":
+            # User only input "Unusualifier" as item name
+            item["defindex"] = 9258
+            item["quality"] = 6
+            item["target"] = None
+            return item
+
+        if name == "strange part":
+            # User only input "Strange Part" as item name
+            item["defindex"] = 5999
+            item["quality"] = 6
+            return item
 
         parts = ["strange part:", "strange cosmetic part:", "strange filter:", "strange count transfer tool", "strange bacon grease"]
         if any(part in name for part in parts):
@@ -367,7 +409,6 @@ class Schema:
             item["quality"] = 11
             name = name.replace("strange", "").strip()
 
-        name = name.replace("uncraftable", "non-craftable")
         if "non-craftable" in name:
             name = name.replace("non-craftable", "").strip()
             item["craftable"] = False
@@ -405,33 +446,16 @@ class Schema:
             name = name.replace("festivized", "").strip()
             item["festive"] = True
 
-        # Try to find quality name in name
-        exception = [
-            'haunted ghosts',
-            'haunted phantasm jr',
-            'haunted phantasm',
-            'haunted metal scrap',
-            'haunted hat',
-            'unusual cap',
-            'vintage tyrolean',
-            'vintage merryweather',
-            'haunted kraken',
-            'haunted forever!',
-            'haunted cremation',
-            "haunted wick",
-            "haunted mist"
-        ]
-
         quality_search = name
-        for ex in exception:
-            if ex in name: 
+        for ex in self._items_name_with_quality:
+            if ex in name:
                 quality_search = name.replace(ex, "").strip()
                 break
 
         # Get all qualities
         schema = self.raw["schema"]
-        if not any(ex in quality_search for ex in exception):
-            # Make sure qualitySearch does not includes in the exception list
+        if quality_search not in self._items_name_with_quality:
+            # Make sure qualitySearch does not include in the exception list
             # example: "Haunted Ghosts Vintage Tyrolean" - will skip this
             for quality, quality_id in self._qualities_lower:
                 if quality == "collector's" and "collector's" in quality_search and 'chemistry set' in quality_search:
@@ -446,9 +470,6 @@ class Schema:
                     item["quality"] = quality_id
                     break
 
-        # Check for effects
-        exclude_atomic = True if any(exclude_name in name for exclude_name in ["bonk! atomic punch", "atomic accolade", "bonk! atomic kicks", "atomic bomber"]) else False
-
         for effect, effect_id in self._effects_lower:
             if effect == "stardust" and "starduster" in name:
                 sub = name.replace("stardust", "").strip()
@@ -460,16 +481,10 @@ class Schema:
             if effect == "smoking" and (name == "smoking jacket" or "smoking skid lid" in name or name == "the smoking skid lid"):
                 # if name only Smoking Jacket or Smoking Skid Lid without effect Smoking, then continue
                 if not name.startswith("smoking smoking"): continue
-            if effect == "haunted ghosts" and "haunted ghosts" in name and item.get("wear"):
-                # if item name includes Haunted Ghosts and wear is defined, skip cosmetic effect and find warpaint for weapon
+            if effect in self._effects_same_name_as_paintkit and item.get("wear") and effect != "hot":
+                # Haunted Ghosts, Pumpkin Patch, Stardust as of now, more probably in the future
                 continue
-            if effect == "pumpkin patch" and "pumpkin patch" in name and item.get("wear"):
-                # if item name includes Pumpkin Patch and wear is defined, skip cosmetic effect and find warpaint for weapon
-                continue
-            if effect == "stardust" and "stardust" in name and item.get("wear"):
-                # if item name includes Stardust and wear is defined, skip cosmetic effect and find warpaint for weapon
-                continue
-            if effect == 'atomic' and ('subatomic' in name or exclude_atomic):
+            if effect == 'atomic' and ('subatomic' in name or name in self._items_name_with_atomic):
                 continue
             if effect == "spellbound" and ("taunt:" in name or "shred alert" in name):
                 # skip "Spellbound" for cosmetic if item is a Taunt (to get the correct "Spellbound Aspect")
@@ -627,7 +642,7 @@ class Schema:
             # Standardize to use only 6522
             item["defindex"] = 6522
             schema_item = self.get_item_by_item_name(name)
-            if not schema_item: return name
+            if not schema_item: return item
             item["target"] = schema_item["defindex"]
             item["quality"] = item.get("quality") or schema_item.get("item_quality") # default quality
 
@@ -704,7 +719,7 @@ class Schema:
                         item["quality"] = item.get("quality") or 6
                         return item
 
-            schema_item = self.get_item_by_name_with_the(name)
+            schema_item = self.get_item_by_item_name(name)
             if not schema_item: return item
             item["defindex"] = schema_item["defindex"]
             item["quality"] = item.get("quality") if item.get("quality") is not None else schema_item.get("item_quality") # default quality
@@ -746,7 +761,7 @@ class Schema:
         Returns:
             dict: The item object.
         """
-        return self._items_by_item_name.get(remove_accents(name.lower()))
+        return self._items_by_item_name.get(remove_the(remove_accents(name.lower())))
 
 
     def get_item_by_sku(self, sku: str) -> dict:
@@ -939,7 +954,7 @@ class Schema:
         to_object = {}
         
         for paint_can in paint_cans:
-            if paint_can["attributes"] is None: continue
+            if not paint_can.get("attributes"): continue
 
             to_object[paint_can["item_name"]] = int(paint_can['attributes'][0]['value'])
 
@@ -1117,7 +1132,7 @@ class Schema:
         """
         weapons = []
         for item in self.get_craftable_weapons_schema():
-            if item["defindex"] not in [48, 349, 1178, 1179, 1180, 1181, 1190]: 
+            if item["defindex"] not in [348, 349, 1178, 1179, 1180, 1181, 1190]:
                 weapons.append(f"{item['defindex']};6;uncraftable")
 
         return weapons
@@ -1179,6 +1194,54 @@ class Schema:
                 except (ValueError, TypeError):
                     continue
         return targets
+
+
+    def get_festivizable_defindexes(self) -> set:
+        """
+        Gets the defindexes of items that can be festivized, from items_game.
+        Extracted once at construction so it survives the items_game drop.
+
+        Returns:
+            set: The defindexes of festivizable items.
+        """
+        festivizable = set()
+        items = (self.raw.get("items_game") or {}).get("items") or {}
+        for defindex, game_item in items.items():
+            if not isinstance(game_item, dict):
+                continue
+            tags = game_item.get("tags")
+            if isinstance(tags, dict) and str(tags.get("can_be_festivized")) == "1":
+                try:
+                    festivizable.add(int(defindex))
+                except (ValueError, TypeError):
+                    continue
+        return festivizable
+
+
+    def is_festivizable(self, defindex: int) -> bool:
+        """
+        Checks whether an item can be festivized.
+
+        Args:
+            defindex (int): The defindex of the item.
+
+        Returns:
+            bool: True if the item can be festivized, False otherwise.
+        """
+        return int(defindex) in self.festivizable_defindexes
+
+
+    def get_strangifier_target(self, defindex: int) -> int:
+        """
+        Gets the target item's defindex for a Strangifier tool.
+
+        Args:
+            defindex (int): The defindex of the Strangifier tool.
+
+        Returns:
+            int: The target item's defindex, or None if not found.
+        """
+        return self.tool_target_list.get(str(defindex))
 
 
     def fix_item(self, item: dict) -> dict:
@@ -1314,8 +1377,8 @@ class Schema:
             if item.get("quality") != schema_item["item_quality"]: return False
 
         # Exclusive Genuine items
-        if ((item.get("quality") != 1 and item["defindex"] in [exclusive_genuine_reversed.get(egr) for egr in exclusive_genuine_reversed]) or 
-            (item.get("quality") == 1 and item["defindex"] in [exclusive_genuine.get(eg) for eg in exclusive_genuine])):
+        if ((item.get("quality") != 1 and str(item["defindex"]) in exclusive_genuine_reversed) or
+            (item.get("quality") == 1 and str(item["defindex"]) in exclusive_genuine)):
             # if quality not 1 AND item.defindex is the one that should be Genuine only, OR
             # if quality is 1 AND item.defindex is the one that can be any quality, return null.
             return False
@@ -1650,7 +1713,6 @@ class Schema:
             protodefs = parsed["lang"]["Tokens"]
             paintkits = []
             for protodef in protodefs:
-                if protodef not in protodefs: continue
                 parts = protodef[0:protodef.index(' ')].split('_')
                 if len(parts) != 3: continue
                 type = parts[0]
@@ -1700,6 +1762,7 @@ class Schema:
                 "munition_crates_list": self.munition_crates_list,
                 "weapon_skins_list": self.weapon_skins_list,
                 "tool_target_list": self.tool_target_list,
+                "festivizable_defindexes": sorted(self.festivizable_defindexes),
             },
         }
 
